@@ -133,40 +133,22 @@ class TransactionDetailActivity : AppCompatActivity() {
         val amountSubtitleText: TextView = findViewById(R.id.detail_amount_subtitle)
         val amountValueText: TextView = findViewById(R.id.detail_amount_value)
 
-        // Parse basket to determine display mode
-        val basket = CheckoutBasket.fromJson(checkoutBasketJson)
-        val showSatsAsPrimary = basket?.let { 
-            it.hasMixedPriceTypes() || it.getFiatItems().isEmpty() 
-        } ?: (entry.getEntryUnit() == "sat")
-        
         // Use BASE amount (excluding tip) for display - this is what was sold
         val baseAmountSats = entry.getBaseAmountSats()
         val baseSatAmount = Amount(baseAmountSats, Amount.Currency.BTC)
-        
-        if (showSatsAsPrimary) {
-            // Primary: Sats (base amount)
-            amountText.text = baseSatAmount.toString()
-            amountValueText.text = baseSatAmount.toString()
-            
-            // Secondary: Fiat equivalent
-            if (entry.enteredAmount > 0 && entry.getEntryUnit() != "sat") {
-                val entryCurrency = Amount.Currency.fromCode(entry.getEntryUnit())
-                val fiatAmount = Amount(entry.enteredAmount, entryCurrency)
-                amountSubtitleText.text = "≈ $fiatAmount"
-                amountSubtitleText.visibility = View.VISIBLE
-            } else {
-                amountSubtitleText.visibility = View.GONE
-            }
-        } else {
-            // Primary: Fiat (entered amount - which is the base amount)
+
+        // Amount is ALWAYS the settlement one in sats (per user request)
+        amountText.text = baseSatAmount.toString()
+        amountValueText.text = baseSatAmount.toString()
+
+        // Secondary: Fiat equivalent (if applicable)
+        if (entry.enteredAmount > 0 && entry.getEntryUnit() != "sat") {
             val entryCurrency = Amount.Currency.fromCode(entry.getEntryUnit())
             val fiatAmount = Amount(entry.enteredAmount, entryCurrency)
-            amountText.text = fiatAmount.toString()
-            amountValueText.text = fiatAmount.toString()
-            
-            // Secondary: Sats paid (base amount, not total)
-            amountSubtitleText.text = baseSatAmount.toString()
+            amountSubtitleText.text = "≈ $fiatAmount"
             amountSubtitleText.visibility = View.VISIBLE
+        } else {
+            amountSubtitleText.visibility = View.GONE
         }
 
         // Date
@@ -227,7 +209,7 @@ class TransactionDetailActivity : AppCompatActivity() {
         if (entry.getEntryUnit() != "sat") {
             val entryCurrency = Amount.Currency.fromCode(entry.getEntryUnit())
             val enteredAmount = Amount(entry.enteredAmount, entryCurrency)
-            enteredAmountText.text = enteredAmount.toString()
+            enteredAmountText.text = enteredAmount.toStringWithoutSymbol()
             enteredAmountRow.visibility = View.VISIBLE
             enteredAmountDivider.visibility = View.VISIBLE
         } else {
@@ -242,7 +224,26 @@ class TransactionDetailActivity : AppCompatActivity() {
 
         val btcPrice = entry.bitcoinPrice
         if (btcPrice != null && btcPrice > 0) {
-            val formattedPrice = String.format(Locale.US, "$%,.2f", btcPrice)
+            // Determine the correct currency for the Bitcoin price.
+            // 1. If entry unit is a fiat currency, use that.
+            // 2. If available, check the checkout basket currency.
+            // 3. Fallback to USD (default behavior).
+            val currencyCode = if (entry.getEntryUnit() != "sat" && entry.getEntryUnit() != "BTC") {
+                entry.getEntryUnit()
+            } else {
+                val basket = CheckoutBasket.fromJson(checkoutBasketJson)
+                basket?.currency ?: "USD"
+            }
+            
+            val currency = Amount.Currency.fromCode(currencyCode)
+            // If we somehow still resolved to BTC (e.g. basket had "SAT"), force USD for price display
+            val priceCurrency = if (currency == Amount.Currency.BTC) Amount.Currency.USD else currency
+            
+            // Format price using Amount class to respect locale and currency symbol
+            // Amount expects minor units (cents), so multiply by 100
+            val priceMinorUnits = kotlin.math.round(btcPrice * 100).toLong()
+            val formattedPrice = Amount(priceMinorUnits, priceCurrency).toString()
+            
             bitcoinPriceText.text = formattedPrice
             bitcoinPriceRow.visibility = View.VISIBLE
             bitcoinPriceDivider.visibility = View.VISIBLE
